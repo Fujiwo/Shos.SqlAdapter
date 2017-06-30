@@ -9,6 +9,7 @@ namespace Shos.SqlAdapter
     using System.Linq;
     using System.Reflection;
     using System.Text;
+    using System.Threading.Tasks;
 
     static class EnumerableExtension
     {
@@ -41,7 +42,7 @@ namespace Shos.SqlAdapter
         }
     }
 
-    static class ReflectionExtension
+    static class SqlAdapterExtension
     {
         public static IEnumerable<PropertyInfo> Keys(this IEnumerable<PropertyInfo> properties, string typeName)
         {
@@ -59,6 +60,34 @@ namespace Shos.SqlAdapter
 
         public static string TypeName(this PropertyInfo property)
             => ((ColumnTypeAttribute)(property.GetCustomAttributes(typeof(ColumnTypeAttribute)).SingleOrDefault()))?.ColumnTypeName;
+
+        public static bool NonQuery(this IDbCommand command)
+        {
+            if (command == null)
+                return false;
+            command.Connection?.Open();
+            return command.ExecuteNonQuery() > 0;
+        }
+
+        public static async Task<bool> NonQueryAsync(this SqlCommand command)
+        {
+            if (command == null)
+                return false;
+            await command.Connection?.OpenAsync();
+            return await command.ExecuteNonQueryAsync() > 0;
+        }
+
+        public static bool NonQuery(this SqlConnection connection, Func<SqlConnection, SqlCommand> commandFactoryMethod)
+        {
+            using (var command = commandFactoryMethod(connection))
+                return command.NonQuery();
+        }
+
+        public static async Task<bool> NonQueryAsync(this SqlConnection connection, Func<SqlConnection, SqlCommand> commandFactoryMethod)
+        {
+            using (var command = commandFactoryMethod(connection))
+                return await command.NonQueryAsync();
+        }
     }
 
     [AttributeUsage(AttributeTargets.Property)]
@@ -130,76 +159,69 @@ namespace Shos.SqlAdapter
                 columnList        = properties.Select(property => new Column { Name = property.Name, ParameterValue = null, ParameterType = property.PropertyType, TypeName = property.TypeName(), IsKey = keyProperties.Contains(property) }).ToList();
             }
 
-            public bool Create(SqlConnection connection)
-            {
-                var partSql = this.Select(culumn => $"{culumn.Name} {culumn.TypeName}").Connect(", ");
-                var sql     = $"CREATE TABLE {Name} ({partSql})";
-                using (var command = new SqlCommand(sql, connection)) {
-                    connection.Open();
-                    return command.ExecuteNonQuery() > 0;
-                }
-            }
-
-            public bool Drop(SqlConnection connection)
-            {
-                var sql = $"DROP TABLE {Name}";
-                using (var command = new SqlCommand(sql, connection)) {
-                    connection.Open();
-                    return command.ExecuteNonQuery() > 0;
-                }
-            }
-
-            public bool Insert(SqlConnection connection)
-            {
-                var sql = $"INSERT INTO {Name} ({this.Select(culumn => culumn.Name).Connect(", ")}) VALUES ({this.Select(culumn => culumn.ParameterName).Connect(", ")})";
-                var parameters = this.Select(culumn => new SqlParameter(culumn.ParameterName, culumn.ParameterValue));
-
-                using (var command = new SqlCommand(sql, connection)) {
-                    command.Parameters.AddRange(parameters.ToArray());
-                    connection.Open();
-                    return command.ExecuteNonQuery() > 0;
-                }
-            }
-
-            public bool Delete(SqlConnection connection)
-            {
-                var keyColumns = this.Where(column => column.IsKey);
-                if (keyColumns.Count() <= 0)
-                    return false;
-                var partSql    = KeyColumns.Select(keyColumn => $"{keyColumn.Name} = { keyColumn.ParameterName}").Connect(" AND ");
-                var sql        = $"DELETE FROM {Name} WHERE {partSql}";
-                var parameters = KeyColumns.Select(keyColumn => new SqlParameter(keyColumn.ParameterName, keyColumn.ParameterValue));
-
-                using (var command = new SqlCommand(sql, connection)) {
-                    command.Parameters.AddRange(parameters.ToArray());
-                    connection.Open();
-                    return command.ExecuteNonQuery() > 0;
-                }
-            }
+            public bool             Create     (SqlConnection connection) =>       connection.NonQuery     (CreateCommand);
+            public async Task<bool> CreateAsync(SqlConnection connection) => await connection.NonQueryAsync(CreateCommand);
+            public bool             Drop       (SqlConnection connection) =>       connection.NonQuery     (DropCommand  );
+            public async Task<bool> DropAsync  (SqlConnection connection) => await connection.NonQueryAsync(DropCommand  );
+            public bool             Insert     (SqlConnection connection) =>       connection.NonQuery     (InsertCommand);
+            public async Task<bool> InsertAsync(SqlConnection connection) => await connection.NonQueryAsync(InsertCommand);
+            public bool             Delete     (SqlConnection connection) =>       connection.NonQuery     (DeleteCommand);
+            public async Task<bool> DeleteAsync(SqlConnection connection) => await connection.NonQueryAsync(DeleteCommand);
 
             public void Add(Column column) => columnList.Add(column);
 
             public IEnumerator<Column> GetEnumerator() => columnList.GetEnumerator();
 
             IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+            SqlCommand CreateCommand(SqlConnection connection)
+            {
+                var partSql = this.Select(culumn => $"{culumn.Name} {culumn.TypeName}").Connect(", ");
+                var sql     = $"CREATE TABLE {Name} ({partSql})";
+                return new SqlCommand(sql, connection);
+            }
+
+            SqlCommand DropCommand(SqlConnection connection)
+            {
+                var sql = $"DROP TABLE {Name}";
+                return new SqlCommand(sql, connection);
+            }
+
+            SqlCommand InsertCommand(SqlConnection connection)
+            {
+                var sql        = $"INSERT INTO {Name} ({this.Select(culumn => culumn.Name).Connect(", ")}) VALUES ({this.Select(culumn => culumn.ParameterName).Connect(", ")})";
+                var parameters = this.Select(culumn => new SqlParameter(culumn.ParameterName, culumn.ParameterValue));
+                var command    = new SqlCommand(sql, connection);
+                command.Parameters.AddRange(parameters.ToArray());
+                return command;
+            }
+
+            SqlCommand DeleteCommand(SqlConnection connection)
+            {
+                var keyColumns = this.Where(column => column.IsKey);
+                if (keyColumns.Count() <= 0)
+                    return null;
+                var partSql    = KeyColumns.Select(keyColumn => $"{keyColumn.Name} = { keyColumn.ParameterName}").Connect(" AND ");
+                var sql        = $"DELETE FROM {Name} WHERE {partSql}";
+                var parameters = KeyColumns.Select(keyColumn => new SqlParameter(keyColumn.ParameterName, keyColumn.ParameterValue));
+                var command    = new SqlCommand(sql, connection);
+                command.Parameters.AddRange(parameters.ToArray());
+                return command;
+            }
         }
 
         public string ConnectionString { get; set; }
-
-        /*
-        CREATE TABLE CardInfo (
-          CardID nchar(6),
-          CustomerID nchar(5),
-          IssueDate datetime,
-          ExpireDate datetime,
-          EmployeeID int
-        )
-         */
 
         public bool Create<ItemType>()
         {
             using (var connection = new SqlConnection(ConnectionString))
                 return new Table(typeof(ItemType)).Create(connection);
+        }
+
+        public async Task<bool> CreateAsync<ItemType>()
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+                return await new Table(typeof(ItemType)).CreateAsync(connection);
         }
 
         public bool Drop<ItemType>()
@@ -208,16 +230,34 @@ namespace Shos.SqlAdapter
                 return new Table(typeof(ItemType)).Drop(connection);
         }
 
+        public async Task<bool> DropAsync<ItemType>()
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+                return await new Table(typeof(ItemType)).DropAsync(connection);
+        }
+
         public bool Insert(object item)
         {
             using (var connection = new SqlConnection(ConnectionString))
                 return new Table(item).Insert(connection);
         }
 
+        public async Task<bool> InsertAsync(object item)
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+                return await new Table(item).InsertAsync(connection);
+        }
+
         public bool Delete(object item)
         {
             using (var connection = new SqlConnection(ConnectionString))
                 return new Table(item).Delete(connection);
+        }
+
+        public async Task<bool> DeleteAsync(object item)
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+                return await new Table(item).DeleteAsync(connection);
         }
     }
 }
