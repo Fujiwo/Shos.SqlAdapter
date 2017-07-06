@@ -123,8 +123,8 @@ namespace Shos.SqlAdapter
             public object ParameterValue { get; set; }
             public Type   ParameterType  { get; set; }
             public string TypeName       {
-                get { return string.IsNullOrWhiteSpace(typeName) ? ParameterTypeNameToDatabaseTypeName(ParameterType.Name) : typeName; }
-                set { typeName = value; }
+                get => string.IsNullOrWhiteSpace(typeName) ? ParameterTypeNameToDatabaseTypeName(ParameterType.Name) : typeName;
+                set => typeName = value;
             }
             public bool   IsKey          { get; set; }
 
