@@ -52,11 +52,11 @@ namespace Shos.SqlAdapter
                    : properties.Where(property => property.Name.ToLower().Equals("id") || property.Name.ToLower().Equals(typeName + "id"));
         }
 
-        public static IEnumerable<PropertyInfo> Keys(this object item)
-        {
-            var itemType = item.GetType();
-            return itemType.GetProperties().Keys(itemType.Name);
-        }
+        //public static IEnumerable<PropertyInfo> Keys(this object item)
+        //{
+        //    var itemType = item.GetType();
+        //    return itemType.GetProperties().Keys(itemType.Name);
+        //}
 
         public static string TypeName(this PropertyInfo property)
             => ((ColumnTypeAttribute)(property.GetCustomAttributes(typeof(ColumnTypeAttribute)).SingleOrDefault()))?.ColumnTypeName;
@@ -88,10 +88,20 @@ namespace Shos.SqlAdapter
             using (var command = commandFactoryMethod(connection))
                 return await command.NonQueryAsync();
         }
+
+        public static IEnumerable<PropertyInfo> GetValidProperties(this Type type)
+            => type.GetProperties().Where(property => property.IsValid());
+
+        static bool IsValid(this PropertyInfo property)
+            => property.CanRead && property.CanWrite && property.GetCustomAttributes(typeof(IgnoreAttribute)).Count() == 0;
     }
 
     [AttributeUsage(AttributeTargets.Property)]
     public class KeyAttribute : Attribute
+    {}
+
+    [AttributeUsage(AttributeTargets.Property)]
+    public class IgnoreAttribute : Attribute
     {}
 
     [AttributeUsage(AttributeTargets.Property)]
@@ -146,7 +156,7 @@ namespace Shos.SqlAdapter
             {
                 var itemType      = item.GetType();
                 Name              = itemType.Name;
-                var properties    = itemType.GetProperties();
+                var properties    = itemType.GetValidProperties();
                 var keyProperties = properties.Keys(Name);
                 columnList        = properties.Select(property => new Column { Name = property.Name, ParameterValue = property.GetValue(item), ParameterType = property.PropertyType, TypeName = property.TypeName(), IsKey = keyProperties.Contains(property) }).ToList();
             }
@@ -154,7 +164,7 @@ namespace Shos.SqlAdapter
             public Table(Type type)
             {
                 Name              = type.Name;
-                var properties    = type.GetProperties();
+                var properties    = type.GetValidProperties();
                 var keyProperties = properties.Keys(Name);
                 columnList        = properties.Select(property => new Column { Name = property.Name, ParameterValue = null, ParameterType = property.PropertyType, TypeName = property.TypeName(), IsKey = keyProperties.Contains(property) }).ToList();
             }
